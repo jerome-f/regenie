@@ -37,24 +37,34 @@ using namespace std;
  * - compute p-values using chi2bar 
  * - return min(pval_pos_nnls, pval_neg_nnls)
 ***************************************/
-
 Eigen::MatrixXd _npd(const Eigen::MatrixXd& X, double eps = 1e-8)
 {
-  // method 1: diag(X) = diag(X) + eps
-  /* V = 0.5 * (V + V.transpose()); // force it symmetric */
-  /* double eps = 1e-4; // to be a function argument */
-  /* V.diagonal().array() += eps; // force positive-definite */
-  
-  // method 2: EVD (negative eigenvalues -> 0) + diag(X) = diag(X) + eps
-  MatrixXd Y = 0.5 * (X + X.transpose());
-  SelfAdjointEigenSolver<MatrixXd> solver(Y);
-  VectorXd D = solver.eigenvalues();
-  MatrixXd V = solver.eigenvectors();
-  VectorXd Dplus = D.cwiseMax(0.0);
-  MatrixXd Z = V * Dplus.asDiagonal() * V.transpose();
-  Z.diagonal().array() += eps;
+    // Symmetrize the matrix
+    MatrixXd Y = 0.5 * (X + X.transpose());
 
-  return(Z);
+    // Eigenvalue decomposition
+    SelfAdjointEigenSolver<MatrixXd> solver(Y);
+    if (solver.info() != Success) {
+        std::cout << "Eigenvalue decomposition failed in _npd.\n";
+        // Proceeding without stopping
+    }
+    VectorXd D = solver.eigenvalues();
+    MatrixXd V = solver.eigenvectors();
+
+    // Threshold for small eigenvalues
+    double tol_eigen = 1e-6 * D.array().abs().maxCoeff();
+    VectorXd Dplus = D.cwiseMax(tol_eigen);
+
+    // Reconstruct the matrix
+    MatrixXd Z = V * Dplus.asDiagonal() * V.transpose();
+
+    // Ensure the matrix is symmetric
+    Z = 0.5 * (Z + Z.transpose());
+
+    // Add epsilon to the diagonal
+    Z.diagonal().array() += eps;
+
+    return Z;
 }
 
 /****************************************************
@@ -62,14 +72,47 @@ Eigen::MatrixXd _npd(const Eigen::MatrixXd& X, double eps = 1e-8)
  * ic.weights function in the R package ic.infer
 ****************************************************/
 
+/*
 Eigen::MatrixXd _inverse(const Eigen::MatrixXd& V)
 {
   int n = V.rows();
   MatrixXd Vpd = _npd(V);
   MatrixXd Vinv = Vpd.llt().solve(MatrixXd::Identity(n, n));
-  /* MatrixXd Vinv = V.inverse(); */
+  // MatrixXd Vinv = V.inverse(); 
   return(Vinv);
 }
+*/
+
+Eigen::MatrixXd _inverse(const Eigen::MatrixXd& V)
+{
+    int n = V.rows();
+    MatrixXd Vpd = _npd(V);
+
+    // Attempt Cholesky decomposition
+    LLT<MatrixXd> llt(Vpd);
+    if (llt.info() == Success) {
+        return llt.solve(MatrixXd::Identity(n, n));
+    } else {
+        // If LLT fails, try LDLT decomposition
+        LDLT<MatrixXd> ldlt(Vpd);
+        if (ldlt.info() == Success) {
+            return ldlt.solve(MatrixXd::Identity(n, n));
+        } else {
+            // Regularize the matrix
+            double eps = 1e-6;
+            Vpd.diagonal().array() += eps;
+            LLT<MatrixXd> llt_reg(Vpd);
+            if (llt_reg.info() == Success) {
+                return llt_reg.solve(MatrixXd::Identity(n, n));
+            } else {
+                std::cout << "Matrix inversion failed in _inverse.\n";
+                // Proceeding by returning identity matrix as a fallback
+                return MatrixXd::Identity(n, n);
+            }
+        }
+    }
+}
+
 
 inline void _assign_wts(vector<double> &wts, int index, double value, int verbose) {
   wts[index] = value;
@@ -258,6 +301,80 @@ Eigen::VectorXd jburden_wts(const Eigen::MatrixXd& V, int verbose)
   return(ret);
 }
 
+double jburden_pnorm(const Eigen::MatrixXd& A,
+    int maxpts, double abseps, int verbose)
+{
+    int n = A.rows();
+    int nc = (n * n - n) / 2;
+    double* bound = new double[n];
+    double* cmat = new double[nc];
+    double error = 0.0;
+    double ret;
+
+    // Ensure A is positive definite
+    Eigen::MatrixXd Apd = _npd(A);
+
+    // Prepare bounds
+    for (int i = 0; i < n; ++i) {
+        bound[i] = 0.0;
+    }
+
+    // Compute standard deviations
+    vector<double> sd(n);
+    for (int i = 0; i < n; ++i) {
+        sd[i] = sqrt(Apd(i, i));
+        if (sd[i] <= 0.0) {
+            delete[] bound;
+            delete[] cmat;
+            std::cout << "Non-positive standard deviation at index " << i << " in jburden_pnorm.\n";
+            return -1.0; // Indicate error
+        }
+    }
+
+    // Build the correlation matrix
+    int k = 0;
+    for (int i = 0; i < n; ++i) {
+        for (int j = 0; j < i; ++j) {
+            double corr = Apd(i, j) / (sd[i] * sd[j]);
+
+            // Clip the correlation to [-1, 1] with a small epsilon
+            double epsilon = 1e-8;
+            if (corr > 1.0 + epsilon) {
+                corr = 1.0;
+            } else if (corr < -1.0 - epsilon) {
+                corr = -1.0;
+            }
+
+            if (corr < -1.0 || corr > 1.0 || !std::isfinite(corr)) {
+                delete[] bound;
+                delete[] cmat;
+                std::cout << "Invalid correlation value between indices " << i << " and " << j << " in jburden_pnorm after clipping.\n";
+                return -1.0; // Indicate error
+            }
+
+            cmat[k++] = corr;
+        }
+    }
+
+    // Call the pmvnorm function
+    ret = pmvnorm_complement(n, maxpts, abseps, bound, cmat, &error);
+
+    // Check for errors
+    if (ret < 0 || !std::isfinite(ret)) {
+        std::cout << "Error in pmvnorm_complement: ret = " << ret << ", error = " << error << "\n";
+        ret = -1.0; // Indicate error
+    }
+
+    // Clean up
+    delete[] bound;
+    delete[] cmat;
+
+    return ret;
+}
+
+
+
+/*
 double jburden_pnorm(const Eigen::MatrixXd& A, 
   int maxpts, double abseps, int verbose)
 {
@@ -277,7 +394,7 @@ double jburden_pnorm(const Eigen::MatrixXd& A,
   
   // convert A to correlation matrix 
   // (requirement of pmvnorm)
-  /* Eigen::MatrixXd C = wts_cov2cor(A); */
+  // Eigen::MatrixXd C = wts_cov2cor(A); /
   vector<double> sd(n);
   for(int i = 0; i < n; ++i) {
     sd[i] = sqrt(Apd(i, i));
@@ -285,18 +402,18 @@ double jburden_pnorm(const Eigen::MatrixXd& A,
   
 
   // fill low-tri version cmat of correlation matrix A
-  /* string name = "C.matirx.tmp"; */
-  /* ofstream file(name.c_str()); */
+  // string name = "C.matirx.tmp"; /
+  // ofstream file(name.c_str()); /
   k = 0; // counter for filled entries in cmat
   for(i = 0; i < n; ++i) {
     for(j = 0; j < i; ++j) {
       cmat[k] = Apd(i, j) / (sd[i]*sd[j]);
       k += 1;
-      /* file << cmat[k] << "\t"; */
+      // file << cmat[k] << "\t"; /
     }
-    /* file << "\n"; */
+    // file << "\n"; /
   }
-  /* file.close(); */
+  // file.close(); /
  
   // call C++ function that calls the Fortran code
   ret = pmvnorm_complement(n, maxpts, abseps, bound, cmat, &error);
@@ -304,6 +421,8 @@ double jburden_pnorm(const Eigen::MatrixXd& A,
 
   return(ret);
 }
+
+*/
 
 /****************************************************
  * Enumerate all sets of k out of n numbers
@@ -983,7 +1102,7 @@ int jburden_wts_adapt(const Eigen::MatrixXd& V, Eigen::VectorXd& wts_out, std::m
 
       double w_comp = jburden_pnorm(V11inv) * jburden_pnorm(V220);
       if(w_comp < 0) {
-        std::cout << "ERROR: computing NNLS weight(i =" << i << ")" 
+        std::cout << "\nERROR: computing NNLS weight(i =" << i << ")" 
           << " & component(j = " << j << " out of " << n_sets_comp << ") failed; " 
           << "pnorm(V11inv)*pnorm(V220) returned negative value (" << w_comp << ")\n";
         return(-1);
@@ -1143,7 +1262,7 @@ double jburden_test(const Eigen::VectorXd &y, const Eigen::MatrixXd& X, std::mt1
   int ret = jburden_wts_adapt(Vpd, w, gen, n_approx, true, verbose);
   if(ret < 0) {
     if(strict) {
-      std::cout << "ERROR: computing NNLS weights failed"
+      std::cout << "\nERROR: computing NNLS weights failed"
         << " by jburden_wts_adapt\n";
       exit(-1);
     } else {
@@ -1164,7 +1283,7 @@ double jburden_test(const Eigen::VectorXd &y, const Eigen::MatrixXd& X, std::mt1
   int ret_pos = jburden_fit_nnls(y, X, bhat_pos, selected_pos, tol, false); // maxit, maxit_inner, verbose);
   if(ret_pos < 0) {
     if(strict) {
-      std::cout << "ERROR: computing NNLS weights failed"
+      std::cout << "\nERROR: computing NNLS weights failed"
         << " by jburden_fit_nnls\n";
       exit(-1);
     } else {
@@ -1184,7 +1303,7 @@ double jburden_test(const Eigen::VectorXd &y, const Eigen::MatrixXd& X, std::mt1
   int ret_neg = jburden_fit_nnls(y, X, bhat_neg, selected_neg, tol, true); // maxit, maxit_inner, verbose);
   if(ret_neg < 0) {
     if(strict) {
-      std::cout << "ERROR: computing NNLS weights failed"
+      std::cout << "\nERROR: computing NNLS weights failed"
         << " by jburden_fit_nnls\n";
       exit(-1);
     } else {
