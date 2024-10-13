@@ -66,7 +66,7 @@ int jburden_wts_adapt(const Eigen::MatrixXd& V, Eigen::VectorXd& wts_out, std::m
 
 // compute CDF for MVN
 double jburden_pnorm(const Eigen::MatrixXd& A, 
-  int maxpts = 25000, double abseps = 1e-3, int verbose = 0);
+  int maxpts = 50000, double abseps = 1e-3, int verbose = 0);
 // the active set algorithm for fitting NNLS
 int jburden_fit_nnls(const Eigen::VectorXd &y, const Eigen::MatrixXd& X, 
   Eigen::VectorXd& bhat_out, vector<bool>& selected_out,

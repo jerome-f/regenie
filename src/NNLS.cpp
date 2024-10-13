@@ -30,6 +30,33 @@
 using namespace Eigen;
 using namespace std;
 
+/***************************************
+ * NLLS: the main function: 
+ * - model fitting
+ * - update V matrix & compute weigts
+ * - compute p-values using chi2bar 
+ * - return min(pval_pos_nnls, pval_neg_nnls)
+***************************************/
+
+Eigen::MatrixXd _npd(const Eigen::MatrixXd& X, double eps = 1e-8)
+{
+  // method 1: diag(X) = diag(X) + eps
+  /* V = 0.5 * (V + V.transpose()); // force it symmetric */
+  /* double eps = 1e-4; // to be a function argument */
+  /* V.diagonal().array() += eps; // force positive-definite */
+  
+  // method 2: EVD (negative eigenvalues -> 0) + diag(X) = diag(X) + eps
+  MatrixXd Y = 0.5 * (X + X.transpose());
+  SelfAdjointEigenSolver<MatrixXd> solver(Y);
+  VectorXd D = solver.eigenvalues();
+  MatrixXd V = solver.eigenvectors();
+  VectorXd Dplus = D.cwiseMax(0.0);
+  MatrixXd Z = V * Dplus.asDiagonal() * V.transpose();
+  Z.diagonal().array() += eps;
+
+  return(Z);
+}
+
 /****************************************************
  * Compute weights for the NNLS test
  * ic.weights function in the R package ic.infer
@@ -38,7 +65,8 @@ using namespace std;
 Eigen::MatrixXd _inverse(const Eigen::MatrixXd& V)
 {
   int n = V.rows();
-  MatrixXd Vinv = V.llt().solve(MatrixXd::Identity(n, n));
+  MatrixXd Vpd = _npd(V);
+  MatrixXd Vinv = Vpd.llt().solve(MatrixXd::Identity(n, n));
   /* MatrixXd Vinv = V.inverse(); */
   return(Vinv);
 }
@@ -240,6 +268,8 @@ double jburden_pnorm(const Eigen::MatrixXd& A,
   double* cmat = new double[nc];
   double error, ret; 
 
+  Eigen::MatrixXd Apd = _npd(A);  
+  
   // fill n bounds with 0
   for(i = 0; i < n; ++i) {
     bound[i] = 0.0;
@@ -250,7 +280,7 @@ double jburden_pnorm(const Eigen::MatrixXd& A,
   /* Eigen::MatrixXd C = wts_cov2cor(A); */
   vector<double> sd(n);
   for(int i = 0; i < n; ++i) {
-    sd[i] = sqrt(A(i, i));
+    sd[i] = sqrt(Apd(i, i));
   }
   
 
@@ -260,7 +290,7 @@ double jburden_pnorm(const Eigen::MatrixXd& A,
   k = 0; // counter for filled entries in cmat
   for(i = 0; i < n; ++i) {
     for(j = 0; j < i; ++j) {
-      cmat[k] = A(i, j) / (sd[i]*sd[j]);
+      cmat[k] = Apd(i, j) / (sd[i]*sd[j]);
       k += 1;
       /* file << cmat[k] << "\t"; */
     }
@@ -1047,33 +1077,6 @@ int jburden_wts_adapt(const Eigen::MatrixXd& V, Eigen::VectorXd& wts_out, std::m
 
   // return success
   return(0);
-}
-
-/***************************************
- * NLLS: the main function: 
- * - model fitting
- * - update V matrix & compute weigts
- * - compute p-values using chi2bar 
- * - return min(pval_pos_nnls, pval_neg_nnls)
-***************************************/
-
-Eigen::MatrixXd _npd(const Eigen::MatrixXd& X, double eps = 1e-6)
-{
-  // method 1: diag(X) = diag(X) + eps
-  /* V = 0.5 * (V + V.transpose()); // force it symmetric */
-  /* double eps = 1e-4; // to be a function argument */
-  /* V.diagonal().array() += eps; // force positive-definite */
-  
-  // method 2: EVD (negative eigenvalues -> 0) + diag(X) = diag(X) + eps
-  MatrixXd Y = 0.5 * (X + X.transpose());
-  SelfAdjointEigenSolver<MatrixXd> solver(Y);
-  VectorXd D = solver.eigenvalues();
-  MatrixXd V = solver.eigenvectors();
-  VectorXd Dplus = D.cwiseMax(0.0);
-  MatrixXd Z = V * Dplus.asDiagonal() * V.transpose();
-  Z.diagonal().array() += eps;
-
-  return(Z);
 }
 
 // main function for the NNLS test

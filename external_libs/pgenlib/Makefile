@@ -3,7 +3,7 @@
 #
 AR         ?= ar
 CXX        ?= g++
-CXXFLAGS    = -O3 -Wall -std=c++11
+CXXFLAGS    = -O3 -Wall -std=c++14
 CFLAGS      = 
 
 UNAME_S := $(shell uname -s)

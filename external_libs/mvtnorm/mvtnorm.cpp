@@ -1,4 +1,4 @@
-
+#include <algorithm> 
 #include <stdlib.h>
 #include <stdio.h>
 #include "mvtnorm.h"
@@ -47,9 +47,9 @@ double pmvnorm_complement(int n,
     double* error)
 {
   int nu_ = 0;
-  int maxpts_ = maxpts;
-  double abseps_ = abseps;
-  double releps_ = 0;
+  int maxpts_ = std::max(maxpts, n * 1000); // Set maxpts_ to the maximum of maxpts and n * 1000
+  double abseps_ = std::min(abseps, 1.0 / (n * 1000)); // Set abseps_ to the minimum of abseps and 1.0 / (n * 1000)
+  double releps_ = 0.0;
 
   double* upper = new double[n];
   int* infin = new int[n];
@@ -63,7 +63,7 @@ double pmvnorm_complement(int n,
 
   // values to return
   double value_ = 0.0;
-  int inform_ = 0.0;
+  int inform_ = 0;
 
   double ret = pmvnorm(&n, &nu_, 
       bound, upper, infin, cmat, delta, 

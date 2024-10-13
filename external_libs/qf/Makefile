@@ -1,6 +1,6 @@
 AR       ?= ar
 CXX      ?= g++
-CXXFLAGS  = -O2 -DNDEBUG -fPIC
+CXXFLAGS  = -O3 -DNDEBUG -fPIC
 
 UNAME_S := $(shell uname -s)
 ifeq ($(UNAME_S),Darwin)

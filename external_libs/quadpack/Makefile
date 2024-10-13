@@ -1,4 +1,4 @@
-FLAG=-O2 -DNDEBUG -fPIC -std=legacy
+FLAG=-O3 -DNDEBUG -fPIC -std=legacy
 AR   ?= ar
 FC   ?= gfortran
 
