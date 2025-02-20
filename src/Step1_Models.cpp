@@ -128,7 +128,8 @@ void fit_null_logistic(bool const& silent, const int& chrom, struct param* param
       m_ests->Y_hat_p.col(i) = pivec.matrix() ;
       get_wvec(pivec, wvec, mask, params->l1_ridge_eps);
       m_ests->Gamma_sqrt.col(i) = wvec.sqrt().matrix();
-      m_ests->X_Gamma[i] = ( pheno_data->new_cov.array().colwise() * (m_ests->Gamma_sqrt.col(i).array() * mask.cast<double>()) ).matrix();
+      m_ests->Gamma_sqrt_mask.col(i) = (m_ests->Gamma_sqrt.col(i).array() * mask.cast<double>()).matrix();
+      m_ests->X_Gamma[i] = m_ests->Gamma_sqrt_mask.col(i).asDiagonal() * pheno_data->new_cov;
       getBasis(m_ests->X_Gamma[i], params);
       if(params->w_interaction || params->firth || (params->use_SPA && params->vc_test)) m_ests->bhat_start.col(i) = betaold.matrix();
       if(params->w_interaction) m_ests->offset_nullreg.col(i) = etavec;
@@ -385,7 +386,7 @@ void fit_null_cox(bool const& silent, const int& chrom, struct param* params, st
 
       if (coxMLE.converge == false) {
         cox_firth cox_null_model;
-        cox_null_model.setup(survivalNullData, pheno_data->new_cov, loco_offset, pheno_data->new_cov.cols(), params->niter_max, params->niter_max_line_search, params->numtol_cox, params->numtol_beta_cox, params->maxstep_null, false, false);
+        cox_null_model.setup(survivalNullData, pheno_data->new_cov, loco_offset, pheno_data->new_cov.cols(), params->niter_max, params->niter_max_line_search, params->numtol_cox, 0, params->numtol_beta_cox, params->maxstep_null, false, false);
         cox_null_model.fit(survivalNullData, pheno_data->new_cov, loco_offset);
 
         coxMLE.setup(survivalNullData, pheno_data->new_cov, loco_offset, mask, params->niter_max, params->niter_max_line_search, params->numtol_cox, false, cox_null_model.beta, cox_null_model.eta);
@@ -411,8 +412,13 @@ void fit_null_cox(bool const& silent, const int& chrom, struct param* params, st
       if (coxRidge_null_lamb0.converge == false) {
         // try cox firth, without firth
         cox_firth cox_null_model;
-        cox_null_model.setup(survivalNullData, pheno_data->new_cov, loco_offset, pheno_data->new_cov.cols(), params->niter_max, params->niter_max_line_search, params->numtol_cox, params->numtol_beta_cox, params->maxstep_null, false, false);
+        cox_null_model.setup(survivalNullData, pheno_data->new_cov, loco_offset, pheno_data->new_cov.cols(), params->niter_max, params->niter_max_line_search, params->numtol_cox, params->numtol_cox_stephalf, params->numtol_beta_cox, params->maxstep_null, false, false);
         cox_null_model.fit(survivalNullData, pheno_data->new_cov, loco_offset);
+
+        if (cox_null_model.converge == false) {
+          cox_null_model.setup(survivalNullData, pheno_data->new_cov, loco_offset, pheno_data->new_cov.cols(), params->niter_max, params->niter_max_line_search, params->numtol_cox, 0, params->numtol_beta_cox, params->maxstep_null, false, false);
+          cox_null_model.fit(survivalNullData, pheno_data->new_cov, loco_offset);
+        }
 
         if (cox_null_model.converge == false) {
           params->pheno_pass(time_index) = false; // phenotype will be ignored

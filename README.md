@@ -10,11 +10,12 @@ It is developed and supported by a team of scientists at the Regeneron Genetics 
 
 The method has the following properties
 
-- It works on quantitative and binary traits, including binary traits with unbalanced case-control ratios
+- It works on quantitative, binary, and time-to-event traits, including binary traits with unbalanced case-control ratios and time-to-event traits with low event rates
 - It can handle population structure and relatedness
 - It can process multiple phenotypes at once efficiently
 - It is fast and memory efficient 🔥
 - For binary traits, it supports Firth logistic regression and an SPA test
+- For time-to-event traits, it supports Firth cox regression
 - It can perform gene/region-based tests, interaction tests and conditional analyses
 - It supports the [BGEN](https://www.well.ox.ac.uk/~gav/bgen_format/), [PLINK](https://www.cog-genomics.org/plink/1.9/formats#bed) bed/bim/fam and [PLINK2](https://www.cog-genomics.org/plink/2.0/formats#pgen) pgen/pvar/psam genetic data formats
 - It is ideally suited for implementation in [Apache Spark](https://spark.apache.org/) (see [GLOW](https://projectglow.io/))
@@ -40,6 +41,10 @@ using the **regenie** [Github repository](https://github.com/rgcgithub/regenie/i
 
 
 ## Version history
+[Version 4.1](https://github.com/rgcgithub/regenie/releases/tag/v4.1) (Timing reduction for single variant association tests; New option --htp to output summary statistics in the [HTP](https://rgcgithub.github.io/remeta/file_formats/#-htp) format; New option --skip-dosage-comp to skip dosage compensation for males in non-PAR chrX regions; Various bug fixes)
+
+[Version 4.0](https://github.com/rgcgithub/regenie/releases/tag/v4.0) (New options `--t2e` and `--eventColList` for time-to-event analysis to specify time-to-event analysis and the event phenotype name, respectively; Fix algorithm used to fit logistic Firth model when using `--write-null-firth` to match closer to the approach used in step 2)
+
 [Version 3.6](https://github.com/rgcgithub/regenie/releases/tag/v3.6) (Bug fix for the approximate Firth test when ultra-rare variants [MAC below 50] are being tested; Address convergence failures & speed-up exact Firth by using warm starts based on null model with just covariates)
 
 [Version 3.5](https://github.com/rgcgithub/regenie/releases/tag/v3.5) (Added CHR/POS columns to snplist output file when using `--write-mask-snplist`; Genotype counts are now reported in the sumstats file when using `--no-split`; Improved efficiency of LOOCV scheme in ridge level 0; Detect carriage return in fam/psam/bim/pvar/sample files; Minor bug fixes)

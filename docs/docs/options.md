@@ -70,6 +70,7 @@ One of the output files from these two commands is included in `example/test_bin
 |`--phenoFile`  | FILE | Required |Phenotypes file|
 |`--phenoCol` | STRING | Optional | Use for each phenotype you want to include in the analysis|
 |`--phenoColList` | STRING | Optional | Comma separated list of phenotypes to include in the analysis|
+|`--eventColList` | STRING | Optional | Comma separated list of columns in the phenotype file to include in the analysis that contain the event times |
 |`--phenoExcludeList` | STRING | Optional | Comma separated list of phenotypes to ignore from the analysis|
 |`--covarFile`  | FILE | Optional | Covariates file|
 |`--covarCol` | STRING | Optional | Use for each covariate you want to include in the analysis|
@@ -232,6 +233,7 @@ Samples with missing LOCO predictions must have their corresponding phenotype va
 |`--step`| INT| Required| specify step for the regenie run (see Overview) [argument can be `1` or `2`] |
 |`--qt`| FLAG| Optional| specify that traits are quantitative (this is the default so can be ommitted)|
 |`--bt`| FLAG| Optional| specify that traits are binary with 0=control,1=case,NA=missing|
+|`--t2e`| FLAG| Optional| specify that traits are time-to-event data with 0=censoring,1=event,NA=missing in event column|
 |`-1,--cc12`| FLAG| Optional| specify to use 1/2/NA encoding for binary traits (1=control,2=case,NA=missing)|
 |`--bsize`| INT| Required| size of the genotype blocks|
 |`--cv`| INT| Optional| number of cross validation (CV) folds [default is 5]|
@@ -250,6 +252,8 @@ Samples with missing LOCO predictions must have their corresponding phenotype va
 |`--nb`| INT| Optional| number of blocks (determined from block size if not provided)|
 |`--strict`|FLAG| Optional| flag to removing samples with missing data at any of the phenotypes|
 |`--ignore-pred`|FLAG| Optional| skip reading the file specified by `--pred` (corresponds to simple linear/logistic regression)|
+|`--htp`|STRING| Optional| to output the summary statistics file in the [HTP](https://rgcgithub.github.io/remeta/file_formats/#-htp) format (string should correspond to cohort name, e.g. 'UKB_450_EUR')|
+|`--exact-p`|FLAG| Optional|avoid capping p-values at 2.2E-307 in the HTP format summary statistics output|
 |`--use-relative-path`| FLAG| Optional| to use relative paths instead of absolute ones for the step 1 output pred.list file|
 |`--use-prs`|FLAG| Optional| flag to use whole genome PRS in `--pred` (this is output in step 1 when using `--print-prs`)|
 |`--gz`|FLAG| Optional| flag to output files in compressed gzip format (LOCO prediction files in step 1 and association results files in step 2) **[this only works when compiling with Boost Iostream library (see Install tab)]**. 
@@ -355,6 +359,8 @@ with the same format as above. Additionaly, an accompanying file with the trait 
 will be generated in ‘file.regenie.Ydict’. Note that allele frequency, sample size and INFO score are computed using
 all analyzed samples.
 
+With option `--htp`, the summary statistics file will follow the [HTP](https://rgcgithub.github.io/remeta/file_formats/#-htp) format.
+
 If option `--write-samples` was used, IDs of samples used for each trait will be written in files
 `file_<phenotype1_name>.regenie.ids,...,file_<phenotypeP_name>.regenie.ids` (tab separated, no header).
 
@@ -430,6 +436,14 @@ Masks will be generated for each domain
 to a mask combining across all domains.
 Variants can only be assigned to a single domain for each set/gene.
 
+Starting with v4.1, you can also specify custom variant weights which will be used in the burden, SKAT/SKAT-O and ACAT-V tests ($w_i$'s in the [gene-based testing overview](../overview/#step-2-gene-based-testing)). Multiple weights can be included in the annotation file after the 3rd column, e.g.
+
+```bash
+1:55039839:T:C PCSK9 LoF 0.9 0.812 1
+1:55039842:G:A PCSK9 missense 0.4 0.23 0.55
+.
+```
+Using `--weights-col 4` will use weights in the 4-th column for the gene-based tests.
 
 ##### Set list file
 
@@ -614,6 +628,7 @@ Note that this cannot be used with the LOVO/LODO schemes.
 |`--mask-lovo`| STRING| Optional| to perform LOVO scheme|
 |`--lovo-snplist`| FILE| Optional| File with list of variants for which to compute LOVO masks|
 |`--mask-lodo`| FLAG| Optional| to perform LODO scheme|
+|`--weights-col`| INT| Optional| column index (1-based) in annotation file to use custom weights in gene-based tests|
 |`--write-mask-snplist`| FLAG| Optional| to write list of variants that went into each mask to file|
 |`--check-burden-files`| FLAG| Optional| to check the concordance between annotation, set list and mask files [see [below](https://rgcgithub.github.io/regenie/options/#checking-input-files)]|
 |`--strict-check-burden`| FLAG| Optional|to exit early if the annotation, set list and mask definition files dont agree [see [below](https://rgcgithub.github.io/regenie/options/#checking-input-files)]|
@@ -756,7 +771,61 @@ The conditioning variants will automatically be ignored from the analysis.
 |`--condition-file-sample `| FILE| Optional| accompagnying sample file for BGEN format|
 |`--max-condition-vars `| INT| Optional| maximum number of conditioning variants [default is 10,000]|
 
+## Survival analyses
 
+Starting from **regenie** v4.0, you can conduct survival analysis for time-to-event data. 
+
+### Phenotype file format
+
+In this small example, there are 5 samples, and the event of interest is the diagnosis of cancer over a period of 10 years.
+
+![Survival_eg](img/survival_eg.png)
+
+Sample 1 is diagnosed with cancer during the study; the `time` variable is the number of years until the sample is diagnosed with cancer. Sample 2 drops out of the study; sample 3 dies during the study; sample 4 and 5 complete the study without being diagnosed with cancer; they are all right-censored, and the `time` variable is the last encounter or death time. The corresponding phenotype file is 
+```
+FID IID Time Cancer
+1 1 6 1
+2 2 5 0
+3 3 2 0
+4 4 10 0
+5 5 10 0
+```
+
+### Required options
+
+Survival analysis in **regenie** requires the following specific options in step 1, step 2 and gene-based burden tests.
+
+| Option | Argument | Type | Description|
+|---|-------|------|----|
+|`--t2e`| FLAG | Required| specify the traits are time-to-event data|
+|`--phenoColList` |	STRING | Required |	Comma separated list of time names to include in the analysis |
+|`--eventColList` |	STRING | Required |	Comma separated list of columns in the phenotype file to include in the analysis that contain the events. These event columns should have 0=no event,1=event,NA=missing |
+
+For the example above, the regenie call is
+```
+./regenie \
+--t2e \
+--phenoColList Time \
+--eventColList Cancer \
+...
+```
+
+For a phenotype file containing multiple time-to-event traits, the order of censor variables listed in `--eventColList` should match the order of time names specified in `--phenoColList`. For example, the phenotype file is
+```
+FID IID Cancer_Time Cancer Asthma_Time Asthma
+1 1 6 1 4 0
+2 2 5 0 8 1
+```
+The regenie call is
+```
+./regenie \
+--t2e \
+--phenoColList Cancer_Time,Asthma_Time \
+--eventColList Cancer,Asthma \
+...
+```
+
+The output format is the same as the [output file for quantitative and binary traits](#output), with the `BETA` column containing the estimated harzard ratio (on log scale).
 
 ## LD computation
 REGENIE can calculate LD between a group of variants on the same chromosome. 

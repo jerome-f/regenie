@@ -216,7 +216,7 @@ void compute_score_qt(vector<uint64> const& indices, int const& chrom, string co
 */
 
 // marginal score test for each snp
-void compute_score(int const& isnp, int const& snp_index, int const& chrom, int const& thread_num, string const& test_string, string const& model_type, const Ref<const MatrixXd>& yres, const Ref<const RowVectorXd>& p_sd_yres, struct param const& params, struct phenodt& pheno_data, struct geno_block& gblock, variant_block* block_info, vector<snp> const& snpinfo, struct ests const& m_ests, struct f_ests& fest, struct in_files const& files, mstream& sout){
+void compute_score(int const& isnp, int const& snp_index, int const& chrom, int const& thread_num, string const& test_string, string const& model_type, const Ref<const MatrixXd>& yres, const Ref<const RowVectorXd>& p_sd_yres, struct param const& params, struct phenodt& pheno_data, struct geno_block& gblock, variant_block* block_info, vector<snp> const& snpinfo, struct ests const& m_ests, struct f_ests& fest, struct in_files& files, mstream& sout){
 
   if(params.trait_mode==1)
     compute_score_bt(isnp, snp_index, chrom, thread_num, test_string, model_type, yres, params, pheno_data, gblock, block_info, snpinfo, m_ests, fest, files, sout);
@@ -234,7 +234,7 @@ void compute_score(int const& isnp, int const& snp_index, int const& chrom, int 
 }
 
 // MCC test stat for QT 
-void compute_score_qt_mcc(int const& isnp, int const& snp_index, int const& thread_num, string const& test_string, string const& model_type, const Ref<const MatrixXd>& yres, const Ref<const RowVectorXd>& p_sd_yres, struct param const& params, struct phenodt& pheno_data, struct geno_block& gblock, variant_block* block_info, vector<snp> const& snpinfo, struct in_files const& files, mstream& sout){
+void compute_score_qt_mcc(int const& isnp, int const& snp_index, int const& thread_num, string const& test_string, string const& model_type, const Ref<const MatrixXd>& yres, const Ref<const RowVectorXd>& p_sd_yres, struct param const& params, struct phenodt& pheno_data, struct geno_block& gblock, variant_block* block_info, vector<snp> const& snpinfo, struct in_files& files, mstream& sout){
 
   double gsc = block_info->flipped ? (4 * params.n_samples + block_info->scale_fac) : block_info->scale_fac;
   string tmpstr; // for sum stats
@@ -340,43 +340,92 @@ void compute_score_qt_mcc(int const& isnp, int const& snp_index, int const& thre
 
 }
 // score test stat for QT
-void compute_score_qt(int const& isnp, int const& snp_index, int const& thread_num, string const& test_string, string const& model_type, const Ref<const MatrixXd>& yres, const Ref<const RowVectorXd>& p_sd_yres, struct param const& params, struct phenodt& pheno_data, struct geno_block& gblock, variant_block* block_info, vector<snp> const& snpinfo, struct in_files const& files, mstream& sout){
+void compute_score_qt(int const& isnp, int const& snp_index, int const& thread_num, string const& test_string, string const& model_type, const Ref<const MatrixXd>& yres, const Ref<const RowVectorXd>& p_sd_yres, struct param const& params, struct phenodt& pheno_data, struct geno_block& gblock, variant_block* block_info, vector<snp> const& snpinfo, struct in_files& files, mstream& sout){
 
-  double gsc = block_info->flipped ? (4 * params.n_samples + block_info->scale_fac) : block_info->scale_fac;
+  bool run_full_test = true; // disable this for QTs // !params.skip_cov_res;
+  double denum, gsc = block_info->flipped ? (4 * params.n_samples + block_info->scale_fac) : block_info->scale_fac;
   string tmpstr; // for sum stats
+  ArrayXd num, denum_arr;
   MapArXd Geno (gblock.Gmat.col(isnp).data(), params.n_samples, 1);
   data_thread* dt_thr = &(gblock.thread_data[thread_num]);
-  double n_sq = sqrt( params.n_analyzed - params.ncov_analyzed );
 
-  if( params.strict_mode ) {
-
-    if(params.skip_blups && dt_thr->is_sparse) // Gsparse is on raw scale (must have yres centered)
-      dt_thr->stats = (yres.transpose() * dt_thr->Gsparse.cwiseProduct(pheno_data.masked_indivs.col(0).cast<double>()) / gsc) / n_sq;
-    else
-      dt_thr->stats = (yres.transpose() * (Geno * pheno_data.masked_indivs.col(0).cast<double>().array()).matrix()) / n_sq;
-
-    if(params.htp_out) {
-      dt_thr->scores = dt_thr->stats * n_sq * gsc;
-      dt_thr->skat_var = (gsc * n_sq)*(gsc * n_sq);
+  if( !run_full_test ) { // only a single trait (i.e. strict mode) -- covariates are not residualized from G
+    if(dt_thr->is_sparse){
+      num = yres.transpose() * dt_thr->Gsparse;
+      denum = dt_thr->Gsparse.squaredNorm();
+    } else {
+      num = (yres.transpose() * Geno.matrix()).array() * gsc;
+      denum = gsc * gsc * Geno.square().sum(); 
     }
+    dt_thr->stats = num / sqrt(denum);
 
-    // estimate
-    dt_thr->bhat = dt_thr->stats * ( pheno_data.scale_Y.array() * p_sd_yres.array()).matrix().transpose().array() / ( n_sq * gsc );
-
-  } else {
-
-    // compute GtG for each phenotype (different missing patterns)
-    dt_thr->scale_fac_pheno = pheno_data.masked_indivs.transpose().cast<double>() * Geno.square().matrix();
-    dt_thr->stats = (yres.transpose() * Geno.matrix()).array() / dt_thr->scale_fac_pheno.sqrt();
-
-    if(params.htp_out) {
-      dt_thr->scores = dt_thr->stats * dt_thr->scale_fac_pheno.sqrt() * gsc;
-      dt_thr->skat_var = (gsc * n_sq)*(gsc * n_sq);
+    // if stats is above threshold, project out covariates and run the full model
+    if(fabs(dt_thr->stats(0)) > params.z_thr) {
+      run_full_test = true;
+      if(!dt_thr->is_sparse) {
+        residualize_geno(pheno_data.new_cov, gblock.Gmat.col(isnp), block_info, params);
+        gsc = block_info->flipped ? (4 * params.n_samples + block_info->scale_fac) : block_info->scale_fac;
+      }
+    } else {
+      if(params.htp_out) {
+        dt_thr->scores = num;
+        dt_thr->skat_var = denum;
+      }
+      dt_thr->bhat = dt_thr->stats / sqrt(denum) * pheno_data.scf_sv;
     }
+  }
 
-    // estimate
-    dt_thr->bhat = dt_thr->stats * ( pheno_data.scale_Y.array() * p_sd_yres.array() ).matrix().transpose().array() / ( sqrt(dt_thr->scale_fac_pheno) * gsc );
+  if( run_full_test ){
+    if( params.strict_mode ) {
 
+      if(dt_thr->is_sparse){
+        ArrayXd XtG = pheno_data.new_cov.transpose() * dt_thr->Gsparse; // k x 1
+        num = yres.transpose() * dt_thr->Gsparse - pheno_data.YtX * XtG.matrix();
+        denum = dt_thr->Gsparse.squaredNorm() - XtG.square().sum();
+      } else {
+        num = (yres.transpose() * Geno.matrix()).array() * gsc;
+        denum = gsc * gsc * (params.n_analyzed - params.ncov_analyzed); 
+      }
+
+      dt_thr->stats = num / sqrt(denum);
+      if(params.htp_out) {
+        dt_thr->scores = num;
+        dt_thr->skat_var = denum;
+      }
+
+      // estimate
+      dt_thr->bhat = dt_thr->stats / sqrt(denum) * pheno_data.scf_sv;
+
+    } else {
+
+      // compute GtG for each phenotype (different missing patterns)
+      if(dt_thr->is_sparse){
+        VectorXd XtG = pheno_data.new_cov.transpose() * dt_thr->Gsparse; // k x 1 - do this for all traits (Geno is only residualized once across traits)
+        num = yres.transpose() * dt_thr->Gsparse - pheno_data.YtX * XtG; // P x 1 
+        double XtG_ss = XtG.squaredNorm();
+        denum_arr.resize(params.n_pheno);
+        for (int ph = 0; ph < params.n_pheno; ph++) {
+          SpVec Gm = dt_thr->Gsparse.cwiseProduct(pheno_data.masked_indivs.col(ph).cast<double>()); // N x 1
+          VectorXd XtGm = pheno_data.new_cov.transpose() * Gm;
+          denum_arr(ph) = Gm.squaredNorm() - 2 * XtGm.dot(XtG) + XtG_ss; // last term is an approximation assuming X'X is same for all traits (=I)
+          //VectorXd vm = (pheno_data.new_cov * XtG).cwiseProduct(pheno_data.masked_indivs.col(ph).cast<double>());
+          //denum_arr(ph) = Gm.squaredNorm() - 2 * XtGm.dot(XtG) + vm.squaredNorm(); // correct callculation but more expensive
+        }
+      } else {
+        num = (yres.transpose() * Geno.matrix()).array() * gsc;
+        denum_arr = gsc * gsc * (pheno_data.masked_indivs.transpose().cast<double>() * Geno.square().matrix()); 
+      }
+
+      dt_thr->stats = num / denum_arr.sqrt();
+      if(params.htp_out) {
+        dt_thr->scores = num;
+        dt_thr->skat_var = denum_arr;
+      }
+
+      // estimate
+      dt_thr->bhat = dt_thr->stats * pheno_data.scf_sv / denum_arr.sqrt();
+
+    }
   }
 
   // SE
@@ -394,7 +443,10 @@ void compute_score_qt(int const& isnp, int const& snp_index, int const& thread_n
         block_info->sum_stats[i].append( print_na_sumstats(i, 1, tmpstr, test_string, block_info, params) );
       continue;
     }
-    if(block_info->flipped) dt_thr->bhat(i) *= -1;
+    if(block_info->flipped) {
+      dt_thr->bhat(i) *= -1;
+      if (params.htp_out) dt_thr->scores(i) *= -1;
+    }
 
     // get pvalue
     get_logp(dt_thr->pval_log(i), dt_thr->chisq_val(i));
@@ -406,7 +458,7 @@ void compute_score_qt(int const& isnp, int const& snp_index, int const& thread_n
 
 }
 
-void compute_score_bt(int const& isnp, int const& snp_index, int const& chrom, int const& thread_num, string const& test_string, string const& model_type, const Ref<const MatrixXd>& yres, struct param const& params, struct phenodt& pheno_data, struct geno_block& gblock, variant_block* block_info, vector<snp> const& snpinfo, struct ests const& m_ests, struct f_ests& fest, struct in_files const& files, mstream& sout){
+void compute_score_bt(int const& isnp, int const& snp_index, int const& chrom, int const& thread_num, string const& test_string, string const& model_type, const Ref<const MatrixXd>& yres, struct param const& params, struct phenodt& pheno_data, struct geno_block& gblock, variant_block* block_info, vector<snp> const& snpinfo, struct ests const& m_ests, struct f_ests& fest, struct in_files& files, mstream& sout){
 
   string tmpstr; 
   VectorXd GW, XtWG;
@@ -428,17 +480,14 @@ void compute_score_bt(int const& isnp, int const& snp_index, int const& chrom, i
     }
 
     MapArXb mask (pheno_data.masked_indivs.col(i).data(), params.n_samples, 1);
-    MapcArXd Wsqrt (m_ests.Gamma_sqrt.col(i).data(), params.n_samples, 1);
     MapcMatXd XWsqrt (m_ests.X_Gamma[i].data(), params.n_samples, m_ests.X_Gamma[i].cols());
 
     // project out covariates from G
     if(dt_thr->is_sparse) {
-      GWs = dt_thr->Gsparse.cwiseProduct( (Wsqrt * mask.cast<double>()).matrix() );
+      GWs = dt_thr->Gsparse.cwiseProduct(m_ests.Gamma_sqrt_mask.col(i));
       XtWG = XWsqrt.transpose() * GWs;
-      dt_thr->Gres = -XWsqrt * XtWG;
-      dt_thr->Gres += GWs;
     } else {
-      GW = (Geno * Wsqrt * mask.cast<double>()).matrix();
+      GW = (Geno * m_ests.Gamma_sqrt_mask.col(i).array()).matrix();
       dt_thr->Gres = GW - XWsqrt * (XWsqrt.transpose() * GW);
     }
 
@@ -447,29 +496,34 @@ void compute_score_bt(int const& isnp, int const& snp_index, int const& chrom, i
       dt_thr->denum(i) = GWs.squaredNorm() - XtWG.squaredNorm();
     else
       dt_thr->denum(i) = dt_thr->Gres.squaredNorm();
-    if( dt_thr->denum(i) < params.numtol ){
+
+    double sqrt_denum = sqrt( dt_thr->denum(i) );
+    if( sqrt_denum < params.numtol ){
       block_info->ignored_trait(i) = true;
       if(!params.p_joint_only && !params.split_by_pheno)
         block_info->sum_stats[i].append( print_na_sumstats(i, 1, tmpstr, test_string, block_info, params) );
       continue;
     }
+
     // score test stat for BT
     if(dt_thr->is_sparse) 
-      dt_thr->stats(i) = GWs.dot(yres.col(i)) / sqrt( dt_thr->denum(i) );
+      dt_thr->stats(i) = GWs.dot(yres.col(i)) / sqrt_denum;
     else
-      dt_thr->stats(i) = dt_thr->Gres.col(0).dot(yres.col(i)) / sqrt( dt_thr->denum(i) );
+      dt_thr->stats(i) = dt_thr->Gres.col(0).dot(yres.col(i)) / sqrt_denum;
 
     if(params.htp_out) {
-      dt_thr->scores(i) = dt_thr->stats(i) * sqrt( dt_thr->denum(i) );
+      dt_thr->scores(i) = dt_thr->stats(i) * sqrt_denum;
       dt_thr->skat_var(i) = dt_thr->denum(i);
     }
 
+    if(dt_thr->is_sparse && (fabs(dt_thr->stats(i)) > params.z_thr)){ // no need if correction is not applied
+      dt_thr->Gres = -XWsqrt * XtWG;
+      dt_thr->Gres += GWs;
+    }
     /*
     if(params.debug) {
       cerr << "\ny:\n" << yres.col(i).topRows(2) << endl;
-      cerr << "\nGresid:\n" << dt_thr->Gres.topRows(2) << endl;
-      if(dt_thr->is_sparse) cerr << "\nsum(GW)=" << GWs.sum() << endl;
-      cerr << "\nscore=" << dt_thr->Gres.col(0).dot(yres.col(i)) << " var(score)=" << dt_thr->Gres.squaredNorm() << endl;
+      cerr << "\nscore=" << dt_thr->stats(i) * sqrt_denum << " var(score)=" << dt_thr->denum(i) << endl;
     }
     */
 
@@ -478,7 +532,10 @@ void compute_score_bt(int const& isnp, int const& snp_index, int const& chrom, i
 
     dt_thr->bhat(i) /= block_info->scale_fac;
     dt_thr->se_b(i) /= block_info->scale_fac;
-    if(block_info->flipped) dt_thr->bhat(i) *= -1;
+    if(block_info->flipped) {
+      dt_thr->bhat(i) *= -1;
+      if (params.htp_out) dt_thr->scores(i) *= -1;
+    }
 
     // print sum stats
     if(!params.p_joint_only)
@@ -491,7 +548,7 @@ void compute_score_bt(int const& isnp, int const& snp_index, int const& chrom, i
 
 
 // poisson
-void compute_score_ct(int const& isnp, int const& snp_index, int const& chrom, int const& thread_num, string const& test_string, string const& model_type, const Ref<const MatrixXd>& yres, struct param const& params, struct phenodt& pheno_data, struct geno_block& gblock, variant_block* block_info, vector<snp> const& snpinfo, struct ests const& m_ests, struct f_ests& fest, struct in_files const& files, mstream& sout){
+void compute_score_ct(int const& isnp, int const& snp_index, int const& chrom, int const& thread_num, string const& test_string, string const& model_type, const Ref<const MatrixXd>& yres, struct param const& params, struct phenodt& pheno_data, struct geno_block& gblock, variant_block* block_info, vector<snp> const& snpinfo, struct ests const& m_ests, struct f_ests& fest, struct in_files& files, mstream& sout){
 
   string tmpstr; 
   MatrixXd GW;
@@ -563,7 +620,7 @@ void compute_score_ct(int const& isnp, int const& snp_index, int const& chrom, i
 
 }
 
-void compute_score_cox(int const& isnp, int const& snp_index, int const& chrom, int const& thread_num, string const& test_string, string const& model_type, struct param const& params, struct phenodt& pheno_data, struct geno_block& gblock, variant_block* block_info, vector<snp> const& snpinfo, struct ests const& m_ests, struct f_ests& fest, struct in_files const& files, mstream& sout){
+void compute_score_cox(int const& isnp, int const& snp_index, int const& chrom, int const& thread_num, string const& test_string, string const& model_type, struct param const& params, struct phenodt& pheno_data, struct geno_block& gblock, variant_block* block_info, vector<snp> const& snpinfo, struct ests const& m_ests, struct f_ests& fest, struct in_files& files, mstream& sout){
 
   string tmpstr; 
   data_thread* dt_thr = &(gblock.thread_data[thread_num]);
@@ -656,14 +713,24 @@ void fit_null_firth_cox(bool const& silent, int const& chrom, struct f_ests* fir
     else offset = m_ests->blups.col(i).array();
 
     cox_firth cox_firth_null;
-    cox_firth_null.setup(m_ests->survival_data_pheno[i], pheno_data->new_cov, offset, pheno_data->new_cov.cols(), params->niter_max_firth_null, params->niter_max_line_search, params->numtol_cox, params->numtol_beta_cox, params->maxstep_null, !params->cox_nofirth, false, m_ests->cox_MLE_NULL[i].beta);
+    cox_firth_null.setup(m_ests->survival_data_pheno[i], pheno_data->new_cov, offset, pheno_data->new_cov.cols(), params->niter_max_firth_null, params->niter_max_line_search, params->numtol_cox, params->numtol_cox_stephalf, params->numtol_beta_cox, params->maxstep_null, !params->cox_nofirth, false, m_ests->cox_MLE_NULL[i].beta);
     cox_firth_null.fit(m_ests->survival_data_pheno[i], pheno_data->new_cov, offset);
+
     if( !cox_firth_null.converge ){ // if failed to converge
-      cerr << "WARNING: Cox regression with Firth correction did not converge (maximum step size=" << params->maxstep_null <<";maximum number of iterations=" << params->niter_max_firth_null <<").";
+      cerr << "WARNING: Cox regression with Firth correction did not converge. Step-halving tol=" << params->numtol_cox_stephalf << "\n";
 
-      cerr << "Retrying with fallback parameters: (maximum step size=" << params->maxstep_null/5 <<";maximum number of iterations=" << params->niter_max_firth_null*5 <<").\n";
+      cerr << "Retrying with strict convergence criteria: step-halving tol=0.\n";
 
-      cox_firth_null.setup(m_ests->survival_data_pheno[i], pheno_data->new_cov, offset, pheno_data->new_cov.cols(), params->niter_max_firth_null*5, params->niter_max_line_search, params->numtol_cox, params->numtol_beta_cox, params->maxstep_null/5, !params->cox_nofirth, false);
+      cox_firth_null.setup(m_ests->survival_data_pheno[i], pheno_data->new_cov, offset, pheno_data->new_cov.cols(), params->niter_max_firth_null, params->niter_max_line_search, params->numtol_cox, 0, params->numtol_beta_cox, params->maxstep_null, !params->cox_nofirth, false, m_ests->cox_MLE_NULL[i].beta);
+      cox_firth_null.fit(m_ests->survival_data_pheno[i], pheno_data->new_cov, offset);
+    }
+
+    if( !cox_firth_null.converge ){ // if failed to converge
+      cerr << "WARNING: Cox regression with Firth correction did not converge (step-halving tol=0, maximum step size=" << params->maxstep_null <<";maximum number of iterations=" << params->niter_max_firth_null <<").";
+
+      cerr << "Retrying with fallback parameters: (step-halving tol=0, maximum step size=" << params->maxstep_null/5 <<";maximum number of iterations=" << params->niter_max_firth_null*5 <<";initiate at 0).\n";
+
+      cox_firth_null.setup(m_ests->survival_data_pheno[i], pheno_data->new_cov, offset, pheno_data->new_cov.cols(), params->niter_max_firth_null*5, params->niter_max_line_search, params->numtol_cox, 0, params->numtol_beta_cox, params->maxstep_null/5, !params->cox_nofirth, false);
       cox_firth_null.fit(m_ests->survival_data_pheno[i], pheno_data->new_cov, offset);
     }
     has_converged(i) = cox_firth_null.converge;
@@ -727,13 +794,13 @@ void fit_firth_cox_snp(int const& chrom, int const& ph, int const& isnp, struct 
 
   // null model
   cox_firth cox_firth_null;
-  cox_firth_null.setup(m_ests->survival_data_pheno[ph], Xmat, m_ests->blups.col(ph), col_incl-1, params->niter_max_firth, params->niter_max_line_search, params->numtol_cox, params->numtol_beta_cox, params->maxstep_null, !params->cox_nofirth, false);
+  cox_firth_null.setup(m_ests->survival_data_pheno[ph], Xmat, m_ests->blups.col(ph), col_incl-1, params->niter_max_firth, params->niter_max_line_search, params->numtol_cox, params->numtol_cox_stephalf, params->numtol_beta_cox, params->maxstep_null, !params->cox_nofirth, false);
   cox_firth_null.fit(m_ests->survival_data_pheno[ph], Xmat, m_ests->blups.col(ph));
 
-  // if (!cox_firth_null.converge) {
-  //   cox_firth_null.setup(m_ests->survival_data_pheno[ph], Xmat, m_ests->blups.col(ph), col_incl-1, params->niter_max_firth*5, params->niter_max_line_search_cox, params->numtol_cox, params->maxstep, !params->cox_nofirth, false);
-  //   cox_firth_null.fit(m_ests->survival_data_pheno[ph], Xmat, m_ests->blups.col(ph));
-  // }
+  if (!cox_firth_null.converge) {
+    cox_firth_null.setup(m_ests->survival_data_pheno[ph], Xmat, m_ests->blups.col(ph), col_incl-1, params->niter_max_firth*5, params->niter_max_line_search, params->numtol_cox, 0, params->numtol_beta_cox, params->maxstep/5, !params->cox_nofirth, false);
+    cox_firth_null.fit(m_ests->survival_data_pheno[ph], Xmat, m_ests->blups.col(ph));
+  }
 
   if (!cox_firth_null.converge) {
     if(params->verbose) cerr << "WARNING: Cox regression with Firth correction null model did not converge!\n";
@@ -743,13 +810,13 @@ void fit_firth_cox_snp(int const& chrom, int const& ph, int const& isnp, struct 
 
   // test model
   cox_firth cox_firth_test;
-  cox_firth_test.setup(m_ests->survival_data_pheno[ph], Xmat, m_ests->blups.col(ph), col_incl, params->niter_max_firth, params->niter_max_line_search, params->numtol_cox, params->numtol_beta_cox, params->maxstep, !params->cox_nofirth, false, cox_firth_null.beta);
+  cox_firth_test.setup(m_ests->survival_data_pheno[ph], Xmat, m_ests->blups.col(ph), col_incl, params->niter_max_firth, params->niter_max_line_search, params->numtol_cox, params->numtol_cox_stephalf, params->numtol_beta_cox, params->maxstep, !params->cox_nofirth, false, cox_firth_null.beta);
   cox_firth_test.fit(m_ests->survival_data_pheno[ph], Xmat, m_ests->blups.col(ph));
 
-  // if (!cox_firth_test.converge) {
-  //   cox_firth_test.setup(m_ests->survival_data_pheno[ph], Xmat, m_ests->blups.col(ph), col_incl, params->niter_max_firth*5, params->niter_max_line_search_cox, params->numtol_cox, params->maxstep, true, false);
-  //   cox_firth_test.fit(m_ests->survival_data_pheno[ph], Xmat, m_ests->blups.col(ph));
-  // }
+  if (!cox_firth_test.converge) {
+    cox_firth_test.setup(m_ests->survival_data_pheno[ph], Xmat, m_ests->blups.col(ph), col_incl, params->niter_max_firth*5, params->niter_max_line_search, params->numtol_cox, 0, params->numtol_beta_cox, params->maxstep/5, !params->cox_nofirth, false);
+    cox_firth_test.fit(m_ests->survival_data_pheno[ph], Xmat, m_ests->blups.col(ph));
+  }
 
   if (!cox_firth_test.converge) {
     if(params->verbose) cerr << "WARNING: Cox regression with Firth correction did not converge!\n";
@@ -789,13 +856,14 @@ void fit_firth_cox_snp_fast(int const& chrom, int const& ph, int const& isnp, st
   // }
 
   cox_firth cox_firth_test;
-  cox_firth_test.setup(m_ests->survival_data_pheno[ph], Gvec, fest->cov_blup_offset.col(ph), 1, params->niter_max_firth, params->niter_max_line_search, params->numtol_cox, params->numtol_beta_cox, params->maxstep, !params->cox_nofirth, false);
+  cox_firth_test.setup(m_ests->survival_data_pheno[ph], Gvec, fest->cov_blup_offset.col(ph), 1, params->niter_max_firth, params->niter_max_line_search, params->numtol_cox, params->numtol_cox_stephalf, params->numtol_beta_cox, params->maxstep, !params->cox_nofirth, false);
   cox_firth_test.fit_1(m_ests->survival_data_pheno[ph], Gvec, fest->cov_blup_offset.col(ph));
 
-  // if(!cox_firth_test.converge){
-  //   cox_firth_test.setup(m_ests->survival_data_pheno[ph], Gvec, fest->cov_blup_offset.col(ph), 1, params->niter_max_firth*5, params->niter_max_line_search_cox, params->numtol_cox*10, params->maxstep, true, false);
-  //   cox_firth_test.fit_1(m_ests->survival_data_pheno[ph], Gvec, fest->cov_blup_offset.col(ph));
-  // }
+  if(!cox_firth_test.converge){
+    cox_firth_test.setup(m_ests->survival_data_pheno[ph], Gvec, fest->cov_blup_offset.col(ph), 1, params->niter_max_firth*5, params->niter_max_line_search, params->numtol_cox, 0, params->maxstep/5, !params->cox_nofirth, false);
+    cox_firth_test.fit_1(m_ests->survival_data_pheno[ph], Gvec, fest->cov_blup_offset.col(ph));
+  }
+
   if(!cox_firth_test.converge){
     if(params->verbose) cerr << "WARNING: Cox regression with Firth correction did not converge!\n";
     block_info->test_fail(ph) = true;
@@ -1234,7 +1302,7 @@ bool fit_firth_nr(double& dev0, const Ref<const ArrayXd>& Y1, const Ref<const Ma
     if(!comp_lrt){
       if( score_max_new > score_max_old ) n_score_inc++; // track consecutive increases
       else n_score_inc = 0;
-      if( n_score_inc > 10 ) return false;
+      if( n_score_inc > 25 ) return false;
     }
 
     // force absolute step size to be less than maxstep for each entry of beta
@@ -2345,12 +2413,12 @@ std::string print_sum_stats_head_htp(const int& snp_count, const string& pheno_n
 
 
 // print sum stats row per snp
-std::string  print_sum_stats_line(int const& snp_index, int const& i, string const& tmpstr, string const& test_string, string const& model_type, variant_block* block_info, data_thread* dt_thr, vector<snp> const& snpinfo, struct in_files const& files, struct param const& params){
+std::string  print_sum_stats_line(int const& snp_index, int const& i, string const& tmpstr, string const& test_string, string const& model_type, variant_block* block_info, data_thread* dt_thr, vector<snp> const& snpinfo, struct in_files& files, struct param const& params){
 
   std::ostringstream buffer;
 
   if(params.htp_out) {
-    buffer <<  print_sum_stats_head_htp(snp_index, files.pheno_names[i], model_type, snpinfo, &params) << print_sum_stats_htp(dt_thr->bhat(i), dt_thr->se_b(i), dt_thr->chisq_val(i), dt_thr->pval_log(i), block_info->af(i), block_info->info(i), block_info->mac(i), block_info->genocounts, i, !block_info->test_fail(i), 1, &params, dt_thr->scores(i), dt_thr->cal_factor(i), -1, dt_thr->skat_var(i));
+    buffer <<  print_sum_stats_head_htp(snp_index, ( params.htp_use_eventname ? files.t2e_map[files.pheno_names[i]] : files.pheno_names[i] ), model_type, snpinfo, &params) << print_sum_stats_htp(dt_thr->bhat(i), dt_thr->se_b(i), dt_thr->chisq_val(i), dt_thr->pval_log(i), block_info->af(i), block_info->info(i), block_info->mac(i), block_info->genocounts, i, !block_info->test_fail(i), 1, &params, dt_thr->scores(i), dt_thr->cal_factor(i), -1, dt_thr->skat_var(i));
   } else {
     buffer << (!params.split_by_pheno && (i>0) ? "" : tmpstr) << print_sum_stats((params.split_by_pheno ? block_info->af(i) : block_info->af1), block_info->af_case(i), block_info->af_control(i), block_info->n_rr, block_info->n_aa, (params.split_by_pheno ? block_info->info(i) : block_info->info1), (params.split_by_pheno ? block_info->ns(i) : block_info->ns1), block_info->ns_case(i), block_info->ns_control(i), test_string, dt_thr->bhat(i), dt_thr->se_b(i), dt_thr->chisq_val(i), dt_thr->pval_log(i), !block_info->test_fail(i), 1, &params, (i+1));
   }
@@ -2460,14 +2528,16 @@ std::string print_sum_stats_single(const double& af, const double& af_case, cons
 std::string print_sum_stats_htp(const double& beta, const double& se, const double& chisq, const double& lpv, const double& af, const double& info, const double& mac, const Ref<const MatrixXi>& genocounts, const int& ph, const bool& test_pass, const int& df, struct param const* params, const double& score, const double& cal_factor, const double& cal_factor_burden, const double& skat_var) {
 
   std::ostringstream buffer;
+  string outp_val = "-1";
   bool print_beta = test_pass && (se>=0);
   bool print_pv = test_pass && (chisq>=0);
-  double outp_val = -1, effect_val, outse_val;
+  double effect_val, outse_val;
 
 
   if(print_pv) {
-    outp_val = max(params->nl_dbl_dmin, pow(10, -lpv)); // to prevent overflow
-    if(outp_val == 1) outp_val = 1 - 1e-7;
+    if(!params->uncapped_pvals && (lpv > params->log10_nl_dbl_dmin)) outp_val = convert_logp_raw( params->log10_nl_dbl_dmin );
+    else if(lpv > 0) outp_val = convert_logp_raw( lpv );
+    else outp_val = "0.9999999";
   } 
 
   // Effect / CI bounds / Pvalue columns
@@ -2524,30 +2594,30 @@ std::string print_sum_stats_htp(const double& beta, const double& se, const doub
   vector<string> infoCol;
   if(print_beta){
     if(params->trait_mode && test_pass){
-      infoCol.push_back( "REGENIE_BETA=" + to_string(beta) );
-      infoCol.push_back( "REGENIE_SE=" + to_string(se) );
+      infoCol.push_back( "REGENIE_BETA=" + convert_double_to_str(beta) );
+      infoCol.push_back( "REGENIE_SE=" + convert_double_to_str(se) );
       // SPA/uncorrected logistic => also print SE from allelic OR
-      if((params->trait_mode==1) && print_pv && !params->firth) infoCol.push_back( "SE=" + to_string(outse_val) );
+      if((params->trait_mode==1) && print_pv && !params->firth) infoCol.push_back( "SE=" + convert_double_to_str(outse_val) );
     } else if(params->trait_mode){
       infoCol.push_back( "REGENIE_BETA=NA" );
       infoCol.push_back( "REGENIE_SE=NA");
       // SPA/uncorrected logistic => also print SE from allelic OR
-      if((params->trait_mode==1) && print_pv && !params->firth) infoCol.push_back( "SE=" + to_string(outse_val) );
+      if((params->trait_mode==1) && print_pv && !params->firth) infoCol.push_back( "SE=" + convert_double_to_str(outse_val) );
     } else infoCol.push_back( "REGENIE_SE=" + to_string(se) );// fot QTs
   }
   // info score
-  if(!params->build_mask && params->dosage_mode && (info >= 0) ) infoCol.push_back( "INFO=" + to_string(info) );
+  if(!params->build_mask && params->dosage_mode && (info >= 0) ) infoCol.push_back( "INFO=" + convert_double_to_str(info) );
   // mac
   if(mac>=0) infoCol.push_back( "MAC=" + to_string(mac) );
   // score test statistic 
-  if(score != params->missing_value_double) infoCol.push_back( "SCORE=" + to_string(score) );
-  if(skat_var != params->missing_value_double) infoCol.push_back("SKATV=" + to_string(skat_var*abs(cal_factor)));
+  if(score != params->missing_value_double) infoCol.push_back( "SCORE=" + convert_double_to_str(score) );
+  if(skat_var != params->missing_value_double) infoCol.push_back("SKATV=" + convert_double_to_str(skat_var*abs(cal_factor)));
   //if(cal_factor != -1) infoCol.push_back( "CF=" + to_string(cal_factor) );
   if(cal_factor_burden != -1) infoCol.push_back( "CF_BURDEN=" + to_string(cal_factor_burden) );
   // df
   if(params->joint_test) infoCol.push_back("DF=" + to_string(df));
   // log10P
-  infoCol.push_back( "LOG10P=" + (print_pv ? to_string(lpv) : "NA") );
+  infoCol.push_back( "LOG10P=" + (print_pv ? convert_double_to_str(lpv) : "NA") );
   // indicator for no beta printed (joint or vc tests)
   if(se<0) infoCol.push_back( "NO_BETA" );
   // print info column
@@ -2572,6 +2642,7 @@ std::string print_summary(Files* ofile, string const& out, std::vector<std::shar
     } else {
       buffer << "\nAssociation results stored separately for each trait " << ( params.htp_out ? "(HTPv4 format) " : "" ) << "in files : \n";
       for( int j = 0; j < params.n_pheno; ++j ) {
+        if( !params.pheno_pass(j) ) continue;
         buffer << "* [" << out_split[j] << "]\n";
         ofile_split[j]->closeFile();
       }

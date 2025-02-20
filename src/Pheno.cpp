@@ -271,7 +271,7 @@ void pheno_read(struct param* params, struct in_files* files, struct filter* fil
         } else if ((pheno_data->phenotypes_raw(indiv_index, event_index) != 0) && (pheno_data->phenotypes_raw(indiv_index, event_index) != 1) && (pheno_data->phenotypes_raw(indiv_index, event_index) != params->missing_value_double)) {
           throw "a phenotype censor value is invalid for individual: FID=" + tmp_str_vec[0] + " IID=" + tmp_str_vec[1] + " Y=" + tmp_str_vec[2+event_index];
         } else if ((pheno_data->phenotypes_raw(indiv_index, time_index) != params->missing_value_double) && (pheno_data->phenotypes_raw(indiv_index, event_index) == params->missing_value_double)) {
-          throw "a phenotype has missing censor with non-missing time for indiviudal: FID=" + tmp_str_vec[0] + " IID=" + tmp_str_vec[1];
+          throw "a phenotype has missing censor with non-missing time for individual: FID=" + tmp_str_vec[0] + " IID=" + tmp_str_vec[1];
         } else if ((pheno_data->phenotypes_raw(indiv_index, time_index) == params->missing_value_double)) {
           pheno_data->masked_indivs(indiv_index, time_index) = false;
           pheno_data->masked_indivs(indiv_index, event_index) = false;
@@ -604,6 +604,13 @@ void covariate_read(struct param* params, struct in_files* files, struct filter*
     if(!params->select_covs && !in_map(tmp_str_vec[i+2], filters->cov_colKeep_names)) // in case specified as categorical
       filters->cov_colKeep_names[tmp_str_vec[i+2]] = true;
     else keep_cols(i) = in_map(tmp_str_vec[i+2], filters->cov_colKeep_names);
+
+    // ignore covariates who correspond to analyzed phenotypes
+    std::vector<std::string>::iterator it_pheno = std::find(files->pheno_names.begin(), files->pheno_names.end(), tmp_str_vec[i+2]);
+    if(it_pheno != files->pheno_names.end()) {
+      keep_cols(i) = false;
+      filters->cov_colKeep_names.erase(tmp_str_vec[i+2]);
+    }
 
     if(keep_cols(i)){
       covar_names.push_back( tmp_str_vec[i+2] );
@@ -1055,7 +1062,7 @@ void prep_run (struct in_files* files, struct filter* filters, struct param* par
   // for step 2, check blup files
   if (params->test_mode && !params->getCorMat){
     // individuals not in blup file will have their phenotypes masked
-    blup_read(files, params, pheno_data, m_ests, sout);
+    blup_read(files, params, pheno_data, m_ests, filters, sout);
     if(params->write_samples) write_ids(files, params, pheno_data, sout);
   }
 
@@ -1102,6 +1109,10 @@ void prep_run (struct in_files* files, struct filter* filters, struct param* par
 
   if(params->ncov > (int)params->n_samples)
     throw "number of covariates is larger than sample size!";
+  if(params->skip_cov_res && (params->n_pheno != 1)){
+     params->skip_cov_res = false;
+     sout << "WARNING: ignoring '--nocov-approx' for multi-trait analysis\n";
+  }
 
   fit_null_models_nonQT(params, pheno_data, m_ests, files, sout);
 
@@ -1218,7 +1229,7 @@ bool has_blup(string const& yname, map<string,string> const& y_read, struct para
 }
 
 // get list of blup files
-void blup_read(struct in_files* files, struct param* params, struct phenodt* pheno_data, struct ests* m_ests, mstream& sout) {
+void blup_read(struct in_files* files, struct param* params, struct phenodt* pheno_data, struct ests* m_ests, struct filter* filters, mstream& sout) {
 
   int n_masked_prior, n_masked_post;
   uint32_t indiv_index;
@@ -1304,6 +1315,16 @@ void blup_read(struct in_files* files, struct param* params, struct phenodt* phe
     }
 
     if( n_masked_post < n_masked_prior ){
+      if((params->trait_mode==1) || (params->trait_mode==3)){ // re-compute case-control indices
+        int event_index = ph;
+        if (params->trait_mode == 3) { // find event column index
+          std::vector<std::string>::iterator it_event = std::find(files->pheno_names.begin(), files->pheno_names.end(), files->t2e_map[files->pheno_names[ph]]);
+          event_index = std::distance(files->pheno_names.begin(), it_event);
+        }
+        get_both_indices(filters->case_control_indices[ph], pheno_data->phenotypes_raw.col(event_index).array() == 1, pheno_data->masked_indivs.col(ph).array());
+        params->pheno_counts(ph, 0) = filters->case_control_indices[ph][0].size();
+        params->pheno_counts(ph, 1) = filters->case_control_indices[ph][1].size();
+      }
       sout << "    + " << n_masked_prior - n_masked_post <<
         " individuals with missing LOCO predictions will be ignored for the trait\n";
     }

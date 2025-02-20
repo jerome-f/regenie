@@ -219,6 +219,7 @@ struct param {
   int mcc = 10; // minimum case count
   double numtol = 1e-6, qr_tol = 1e-7;
   double numtol_cox = 2.5e-4; // tolerance level for cox
+  double numtol_cox_stephalf = 2.5e-4; // tolerance level for cox
   double numtol_beta_cox = 1e-8; // tolerance level for cox
   double numtol_firth = 2.5e-4; // tolerance level for firth
   double numtol_eps = 10 * std::numeric_limits<double>::epsilon();
@@ -226,6 +227,7 @@ struct param {
   double eigen_val_rel_tol = 1e-15;
   double const_cov_cox_tol = 1e-6;
   double nl_dbl_dmin = 10.0 * std::numeric_limits<double>::min();
+  double log10_nl_dbl_dmin = -log10(nl_dbl_dmin);
   int threads = 0, neff_threads = 1;
   bool t2e_event_l0 = false;
   bool t2e_l1_pi6 = false;
@@ -306,7 +308,7 @@ struct param {
   bool skip_blups = false, blup_cov = false;
   bool with_flip = true; // can flip to minor allele for all variants
   bool use_prs = false; // adjust for whole genome PRS (no LOCO)
-  double min_MAC = 5, min_MAC_mask, minHOMs = 0; // minimum MAC of SNPs in testing mode
+  double min_MAC = 5, min_MAC_mask, minHOMs = 0, prop_zero_thr = 0.5; // minimum MAC of SNPs in testing mode
   bool setMinMAC = false;
   double min_INFO = 0; // minimum INFO score of SNPs (dosages) in testing mode
   bool setMinINFO = false;
@@ -334,15 +336,15 @@ struct param {
   int niter_max_firth = 250, niter_max_firth_adam = 25; // max number of iterations in Firth logistic reg.
   int niter_max_firth_null = 1000; // max number of iterations in Firth logistic reg. null model
   int niter_max_line_search = 25; // max number of iterations for line search in logistic reg.
-  int niter_max_line_search_cox = 50; // max number of iterations for line search in logistic reg.
   int maxstep = 5; // max step size in penalized logistic regression
   int maxstep_null = 25; // max step size in null penalized logistic regression
   bool fix_maxstep_null = false; // if user specifies max step size
   bool back_correct_se = false; // for SE with Firth
+  // extra
   bool print_pheno_name = false; // add phenotype name when writing to file with sample IDs
-  bool htp_out = false, af_cc = false; 
+  bool htp_out = false, htp_use_eventname = false, uncapped_pvals = false, af_cc = false, skip_cov_res = false; 
   std::string cohort_name; // Name of cohort to add in HTP output
-  bool set_range = false;
+  bool set_range = false, skip_dosage_comp = false;
   int range_chr; 
   double range_min, range_max; // use genomic region to filter variants
   std::string build_code = "hg38"; // to identify chrX PAR region bounds
@@ -524,7 +526,8 @@ std::vector<std::string> check_name(std::string const&,mstream&);
 void check_build_code(struct param*);
 double convertDouble(const std::string&,struct param const*,mstream&);
 float convertFloat(const std::string&,struct param const*,mstream&);
-std::string convert_logp_raw(double const& logp);
+std::string convert_double_to_str(double const&);
+std::string convert_logp_raw(double const& logp, double const& log_dbl_min = -log10(std::numeric_limits<double>::min()) - 1);
 double convertNumLevel(const std::string&,std::map<std::string,int>&,struct param const*,mstream&);
 void check_inter_var(std::string&,std::string&,mstream&);
 std::string print_csv(const std::vector<std::string>&);
